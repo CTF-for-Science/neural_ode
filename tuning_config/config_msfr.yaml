@@ -1,0 +1,28 @@
+dataset:
+  name: msfr
+  pair_id: [1, 2, 3, 4, 5, 6, 7, 8, 9]  # All pairs (E1-E12)
+model:
+  name: neural_ode
+  train_split: 0.8
+  seed: 0
+  method: normalize
+  epochs: 150  # More epochs for convergence
+  n_trials: 200  # Better hyperparameter coverage
+
+hyperparameters:
+  hidden_dim:
+    lower_bound: 256
+    type: randint
+    upper_bound: 1024  # Larger for 19,400-dim input
+  lr:
+    lower_bound: 1.0e-05
+    type: loguniform
+    upper_bound: 0.01
+  seq_len:
+    lower_bound: 20
+    type: randint
+    upper_bound: 100
+  batch_size:
+    lower_bound: 4
+    type: randint
+    upper_bound: 16  # Smaller max due to high dims

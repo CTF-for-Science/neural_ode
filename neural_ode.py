@@ -122,12 +122,9 @@ class NeuralOde:
             y_train_all = torch.cat(y_train_list, dim=0)
             normalizer = Normalizer(y_train_all, normalize=self.method == "normalize")
 
-            # === Normalize all trajectories ===
-            y_train_list = [normalizer.normalize(y).to(device) for y in y_train_list]
-            y_eval_list  = [normalizer.normalize(y).to(device) for y in y_eval_list]
-            # (We keep original t lists but will use a shared normalized grid for speed)
-            t_train_list = [t.to(device) for t in t_train_list]
-            t_eval_list  = [t.to(device) for t in t_eval_list]
+            # === Normalize all trajectories (keep on CPU to save GPU memory) ===
+            y_train_list = [normalizer.normalize(y) for y in y_train_list]
+            y_eval_list  = [normalizer.normalize(y) for y in y_eval_list]
 
             dim = y_train_list[0].shape[1]
             ode_func = ODEF(input_dim=dim, hidden_dim=self.hidden_size).to(device)
@@ -135,11 +132,10 @@ class NeuralOde:
             optimizer = torch.optim.Adam(ode_func.parameters(), lr=lr, weight_decay=1e-4)
             loss_fn = nn.MSELoss()
 
-            # === Build dataset (each item is already a fixed-length window) ===
-            X = torch.stack(y_train_list)  # [N, L, D]
-            # We don’t need per-item t anymore; we’ll use a shared [0,1] grid
+            # === Build dataset on CPU, batch to GPU on-the-fly ===
+            X = torch.stack(y_train_list)  # [N, L, D] on CPU
             dataset = torch.utils.data.TensorDataset(X)
-            loader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=True, drop_last=True)
+            loader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=True, drop_last=True, pin_memory=True)
 
             # Shared normalized time grid [0,1] with L points
             L = seq_len
@@ -212,14 +208,17 @@ class NeuralOde:
                 norm_init   = normalizer.normalize(init_tensor)
                 init_state  = norm_init if norm_init.ndim == 1 else norm_init[-1]  # [D]
 
-            # Prediction grid: send to device, scale to [0,1] for RK4 step sizing
+            # Prediction grid: send to device, scale for RK4 step sizing
             t_pred = self.prediction_timesteps.to(device).float()
-            t_pred = (t_pred - t_pred[0]) / (t_pred[-1] - t_pred[0] + 1e-12)
+            # FIX: Normalize by training time span (not prediction span) for consistent dynamics
+            T_train = self.training_timesteps[0][-1] - self.training_timesteps[0][0]
+            t_pred = (t_pred - t_pred[0]) / (T_train + 1e-12)
 
             pred_traj = odeint(
                 ode_func, init_state, t_pred,
                 method="rk4",
-                options={"step_size": 1.0 / (max(1, len(t_pred) - 1))}
+                # FIX: Use same step_size as training for consistent integration
+                options={"step_size": 1.0 / (seq_len - 1)}
             )  # [Lp, D]
             pred_traj = normalizer.denormalize(pred_traj)
             return np.array(pred_traj.detach().cpu())

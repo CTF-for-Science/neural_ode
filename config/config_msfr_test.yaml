@@ -1,0 +1,11 @@
+dataset:
+  name: msfr
+  pair_id: [1]
+model:
+  name: neural_ode
+  method: normalize
+  lr: 0.001
+  hidden_dim: 64
+  batch_size: 4
+  seq_len: 20  # Smaller windows
+  epochs: 3

@@ -171,12 +171,13 @@ def main(config_path: str, save_config: bool = True) -> None:
         # Return score
         return {"score": score}
 
-    # Create Ray Tune object
-    tuner = tune.Tuner(objective,
+    # Create Ray Tune object with GPU resource
+    tuner = tune.Tuner(
+                        tune.with_resources(objective, {"cpu": 1, "gpu": 1}),
                         param_space=param_dict,
                         tune_config=tune.TuneConfig(
                             #search_alg=OptunaSearch(), # Throws errors (seg faults) but still runs
-                            max_concurrent_trials=1,
+                            max_concurrent_trials=3,  # Use all 3 GPUs in parallel
                             num_samples=blank_config['model']['n_trials'],
                             metric="score",
                             mode="max",
