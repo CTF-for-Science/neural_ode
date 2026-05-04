@@ -20,6 +20,8 @@ def parse_args():
     parser.add_argument('--run-opt', type=str, required=True, help='Path to run_opt.py')
     parser.add_argument('--num-gpus', type=int, required=True, help='Number of GPUs/workers')
     parser.add_argument('--worker-id', type=str, default=None, help='Base worker ID')
+    parser.add_argument('--preload-dataset', type=str, default=None, help='Dataset name to preload at startup')
+    parser.add_argument('--preload-pairs', type=str, default=None, help='Comma-separated pair IDs to preload')
     return parser.parse_args()
 
 
@@ -45,10 +47,16 @@ def main():
             '--worker-id', worker_id,
         ]
 
+        # Add preload arguments if specified
+        if args.preload_dataset:
+            cmd.extend(['--preload-dataset', args.preload_dataset])
+        if args.preload_pairs:
+            cmd.extend(['--preload-pairs', args.preload_pairs])
+
         p = subprocess.Popen(cmd, env=env, stdout=None, stderr=None)
         processes.append(p)
         print(f"Started {worker_id} (pid {p.pid}, GPU {gpu_id})")
-        time.sleep(10)  # Stagger worker starts
+        time.sleep(15)  # Stagger worker starts
 
     print(f"\nAll {args.num_gpus} workers running. Press Ctrl+C to stop.")
 

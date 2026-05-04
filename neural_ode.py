@@ -196,8 +196,8 @@ class NeuralOde:
 
                 print(f"Epoch {epoch+1:4d} | Train Loss: {epoch_loss / max(1,len(loader)):.6f} | Eval Loss: {avg_eval_loss:.6f}")
 
-                # Write progress for distributed worker
-                if self.batch_id:
+                # Write progress for distributed worker (every 10 epochs to reduce I/O)
+                if self.batch_id and (epoch + 1) % 10 == 0:
                     progress_file = Path(__file__).parent / f"progress_{self.batch_id}.yaml"
                     with open(progress_file, 'w') as pf:
                         yaml.dump({'epoch': epoch + 1, 'total_epochs': niters, 'pair_id': self.pair_id}, pf)

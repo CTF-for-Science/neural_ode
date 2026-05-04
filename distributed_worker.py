@@ -20,6 +20,63 @@ import traceback
 import requests
 import yaml
 
+# Global cache for preloaded data
+_data_cache = {}
+
+
+def preload_dataset(dataset_name, pair_ids):
+    """Preload dataset into memory cache to avoid I/O contention."""
+    global _data_cache
+
+    if dataset_name in _data_cache:
+        return  # Already loaded
+
+    print(f"Preloading {dataset_name} data into memory...", flush=True)
+
+    # Import data loading functions
+    import ctf4science.data_module as dm
+    _original_load_dataset = dm.load_dataset
+    _original_get_training_timesteps = dm.get_training_timesteps
+
+    _data_cache[dataset_name] = {}
+    for pair_id in pair_ids:
+        try:
+            train_data, init_data = _original_load_dataset(dataset_name, pair_id)
+            training_ts = _original_get_training_timesteps(dataset_name, pair_id)
+            _data_cache[dataset_name][pair_id] = {
+                'train_data': train_data,
+                'init_data': init_data,
+                'training_timesteps': training_ts,
+            }
+        except Exception as e:
+            print(f"Warning: Could not preload pair {pair_id}: {e}")
+
+    print(f"Preloaded {len(_data_cache[dataset_name])} pairs", flush=True)
+
+    # Monkey-patch the data module to use cached data
+    def cached_load_dataset(name, pair_id, transpose=False):
+        if name in _data_cache and pair_id in _data_cache[name]:
+            cached = _data_cache[name][pair_id]
+            train_data = cached['train_data']
+            init_data = cached['init_data']
+            if transpose:
+                train_data = [td.T for td in train_data]
+                init_data = init_data.T if init_data is not None else None
+            # Return deep copies to avoid mutation issues
+            import copy
+            return copy.deepcopy(train_data), copy.deepcopy(init_data) if init_data is not None else None
+        return _original_load_dataset(name, pair_id, transpose)
+
+    def cached_get_training_timesteps(name, pair_id):
+        if name in _data_cache and pair_id in _data_cache[name]:
+            import copy
+            return copy.deepcopy(_data_cache[name][pair_id]['training_timesteps'])
+        return _original_get_training_timesteps(name, pair_id)
+
+    dm.load_dataset = cached_load_dataset
+    dm.get_training_timesteps = cached_get_training_timesteps
+    print("Data loading functions patched to use cache", flush=True)
+
 
 def parse_args():
     parser = argparse.ArgumentParser(description='Worker for distributed hyperparameter tuning')
@@ -29,6 +86,8 @@ def parse_args():
     parser.add_argument('--heartbeat-interval', type=int, default=60)
     parser.add_argument('--retry-delay', type=int, default=30)
     parser.add_argument('--max-retries', type=int, default=3)
+    parser.add_argument('--preload-dataset', type=str, default=None, help='Dataset name to preload at startup')
+    parser.add_argument('--preload-pairs', type=str, default=None, help='Comma-separated pair IDs to preload (e.g., 1,2,3)')
     return parser.parse_args()
 
 
@@ -193,6 +252,11 @@ def main():
     if not os.path.exists(args.run_opt):
         print(f"Error: run_opt.py not found: {args.run_opt}")
         sys.exit(1)
+
+    # Preload dataset if specified (staggers I/O across workers)
+    if args.preload_dataset and args.preload_pairs:
+        pair_ids = [int(p.strip()) for p in args.preload_pairs.split(',')]
+        preload_dataset(args.preload_dataset, pair_ids)
 
     # Start heartbeat
     run_opt_dir = os.path.dirname(os.path.abspath(args.run_opt))
