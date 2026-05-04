@@ -19,6 +19,30 @@ file_dir = Path(__file__).parent
 # Currently using init_data in hyperparameter optimization
 # Currently not counting init_data in train_split amount
 
+def get_train_split(dataset_name: str, pair_id: int, default_split: float = 0.8) -> float:
+    """
+    Calculate appropriate train_split based on data size and metric requirements.
+    Ensures validation data has enough timesteps for long_time metric (k_long=200).
+    """
+    # Get training timesteps to determine total length
+    training_ts = get_training_timesteps(dataset_name, pair_id)
+    total_timesteps = len(training_ts[0]) if len(training_ts) > 0 else 1000
+    
+    # k_long requirement (from msfr.yaml evaluation_params)
+    k_long = 200
+    min_val_timesteps = k_long + 50  # Add margin
+    
+    # Calculate max train_split that still gives enough validation data
+    max_train_split = 1.0 - (min_val_timesteps / total_timesteps)
+    
+    # Use the smaller of default_split and max_train_split
+    train_split = min(default_split, max_train_split)
+    
+    # Ensure train_split is reasonable (at least 0.5)
+    train_split = max(train_split, 0.5)
+    
+    return train_split
+
 def main(config_path: str) -> None:
     """
     Main function to run the neuralODE# model on specified sub-datasets.
@@ -54,8 +78,11 @@ def main(config_path: str) -> None:
 
     # Process each sub-dataset
     for pair_id in pair_ids:
+        # Calculate appropriate train_split for this pair
+        default_split = config['model']['train_split']
+        train_split = get_train_split(dataset_name, pair_id, default_split)
+        
         # Generate training and validation splits (and burn-in matrix when applicable) 
-        train_split = config['model']['train_split']
         train_data, val_data, init_data = load_validation_dataset(dataset_name, pair_id, train_split)
         prediction_timesteps = get_validation_prediction_timesteps(dataset_name, pair_id, train_split)
 
