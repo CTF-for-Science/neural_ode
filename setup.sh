@@ -50,7 +50,7 @@ if [ -d "$DATA_DIR/msfr" ] && [ "$(ls -A $DATA_DIR/msfr 2>/dev/null)" ]; then
         echo "Skipping download."
     else
         echo "Downloading data..."
-        gdown --id "$FILE_ID" -O "$OUTPUT_FILE"
+        gdown "$FILE_ID" -O "$OUTPUT_FILE"
 
         echo "Extracting data..."
         unzip -o "$OUTPUT_FILE"
@@ -58,7 +58,7 @@ if [ -d "$DATA_DIR/msfr" ] && [ "$(ls -A $DATA_DIR/msfr 2>/dev/null)" ]; then
     fi
 else
     echo "Downloading data..."
-    gdown --id "$FILE_ID" -O "$OUTPUT_FILE"
+    gdown "$FILE_ID" -O "$OUTPUT_FILE"
 
     echo "Extracting data..."
     unzip -o "$OUTPUT_FILE"
