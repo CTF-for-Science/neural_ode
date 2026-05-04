@@ -48,7 +48,7 @@ def main():
         p = subprocess.Popen(cmd, env=env, stdout=None, stderr=None)
         processes.append(p)
         print(f"Started {worker_id} (pid {p.pid}, GPU {gpu_id})")
-        time.sleep(2)  # Stagger worker starts
+        time.sleep(10)  # Stagger worker starts
 
     print(f"\nAll {args.num_gpus} workers running. Press Ctrl+C to stop.")
 
