@@ -20,63 +20,6 @@ import traceback
 import requests
 import yaml
 
-# Global cache for preloaded data
-_data_cache = {}
-
-
-def preload_dataset(dataset_name, pair_ids):
-    """Preload dataset into memory cache to avoid I/O contention."""
-    global _data_cache
-
-    if dataset_name in _data_cache:
-        return  # Already loaded
-
-    print(f"Preloading {dataset_name} data into memory...", flush=True)
-
-    # Import data loading functions
-    import ctf4science.data_module as dm
-    _original_load_dataset = dm.load_dataset
-    _original_get_training_timesteps = dm.get_training_timesteps
-
-    _data_cache[dataset_name] = {}
-    for pair_id in pair_ids:
-        try:
-            train_data, init_data = _original_load_dataset(dataset_name, pair_id)
-            training_ts = _original_get_training_timesteps(dataset_name, pair_id)
-            _data_cache[dataset_name][pair_id] = {
-                'train_data': train_data,
-                'init_data': init_data,
-                'training_timesteps': training_ts,
-            }
-        except Exception as e:
-            print(f"Warning: Could not preload pair {pair_id}: {e}")
-
-    print(f"Preloaded {len(_data_cache[dataset_name])} pairs", flush=True)
-
-    # Monkey-patch the data module to use cached data
-    def cached_load_dataset(name, pair_id, transpose=False):
-        if name in _data_cache and pair_id in _data_cache[name]:
-            cached = _data_cache[name][pair_id]
-            train_data = cached['train_data']
-            init_data = cached['init_data']
-            if transpose:
-                train_data = [td.T for td in train_data]
-                init_data = init_data.T if init_data is not None else None
-            # Return deep copies to avoid mutation issues
-            import copy
-            return copy.deepcopy(train_data), copy.deepcopy(init_data) if init_data is not None else None
-        return _original_load_dataset(name, pair_id, transpose)
-
-    def cached_get_training_timesteps(name, pair_id):
-        if name in _data_cache and pair_id in _data_cache[name]:
-            import copy
-            return copy.deepcopy(_data_cache[name][pair_id]['training_timesteps'])
-        return _original_get_training_timesteps(name, pair_id)
-
-    dm.load_dataset = cached_load_dataset
-    dm.get_training_timesteps = cached_get_training_timesteps
-    print("Data loading functions patched to use cache", flush=True)
-
 
 def parse_args():
     parser = argparse.ArgumentParser(description='Worker for distributed hyperparameter tuning')
@@ -86,55 +29,41 @@ def parse_args():
     parser.add_argument('--heartbeat-interval', type=int, default=60)
     parser.add_argument('--retry-delay', type=int, default=30)
     parser.add_argument('--max-retries', type=int, default=3)
-    parser.add_argument('--preload-dataset', type=str, default=None, help='Dataset name to preload at startup')
-    parser.add_argument('--preload-pairs', type=str, default=None, help='Comma-separated pair IDs to preload (e.g., 1,2,3)')
     return parser.parse_args()
 
 
 class HeartbeatThread(threading.Thread):
     """Background thread for heartbeats."""
 
-    def __init__(self, server_url, worker_id, run_opt_dir, interval=60):
+    def __init__(self, server_url, worker_id, interval=60):
         super().__init__(daemon=True)
         self.server_url = server_url
         self.worker_id = worker_id
-        self.run_opt_dir = run_opt_dir
         self.interval = interval
         self.trial_id = None
-        self.batch_id = None
+        self.progress = {}
         self.running = True
 
-    def set_trial(self, trial_id, batch_id=None):
+    def set_trial(self, trial_id):
         self.trial_id = trial_id
-        self.batch_id = batch_id
+        self.progress = {}
+
+    def update_progress(self, info):
+        self.progress = info
 
     def stop(self):
         self.running = False
-
-    def read_progress(self):
-        """Read progress from progress file."""
-        if not self.batch_id:
-            return {}
-        try:
-            progress_file = os.path.join(self.run_opt_dir, f"progress_{self.batch_id}.yaml")
-            if os.path.exists(progress_file):
-                with open(progress_file, 'r') as f:
-                    return yaml.safe_load(f) or {}
-        except:
-            pass
-        return {}
 
     def run(self):
         while self.running:
             if self.trial_id is not None:
                 try:
-                    progress = self.read_progress()
                     response = requests.post(
                         f"{self.server_url}/heartbeat",
                         json={
                             'trial_id': self.trial_id,
                             'worker_id': self.worker_id,
-                            'progress': progress,
+                            'progress': self.progress,
                         },
                         timeout=10
                     )
@@ -253,14 +182,8 @@ def main():
         print(f"Error: run_opt.py not found: {args.run_opt}")
         sys.exit(1)
 
-    # Preload dataset if specified (staggers I/O across workers)
-    if args.preload_dataset and args.preload_pairs:
-        pair_ids = [int(p.strip()) for p in args.preload_pairs.split(',')]
-        preload_dataset(args.preload_dataset, pair_ids)
-
     # Start heartbeat
-    run_opt_dir = os.path.dirname(os.path.abspath(args.run_opt))
-    heartbeat = HeartbeatThread(args.server, worker_id, run_opt_dir, args.heartbeat_interval)
+    heartbeat = HeartbeatThread(args.server, worker_id, args.heartbeat_interval)
     heartbeat.start()
 
     while True:
@@ -286,8 +209,7 @@ def main():
             print(f"Params: {params}")
             print(f"{'='*50}\n")
 
-            batch_id = trial_config['model'].get('batch_id', '')
-            heartbeat.set_trial(trial_id, batch_id)
+            heartbeat.set_trial(trial_id)
 
             try:
                 result = run_trial(args.run_opt, trial_config)
@@ -299,7 +221,7 @@ def main():
                 print(f"\nTrial {trial_id} failed: {error_msg}")
                 report_result(args.server, worker_id, trial_id, False, {'error': error_msg}, args.max_retries)
 
-            heartbeat.set_trial(None, None)
+            heartbeat.set_trial(None)
 
         except KeyboardInterrupt:
             print("\nInterrupted. Exiting.")

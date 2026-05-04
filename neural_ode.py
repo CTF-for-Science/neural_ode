@@ -1,8 +1,5 @@
 import numpy as np
 import importlib
-import os
-import yaml
-from pathlib import Path
 from typing import Optional, Dict
 from ctf4science.eval_module import evaluate_custom
 import torch
@@ -70,7 +67,6 @@ class NeuralOde:
         self.training_timesteps = torch.tensor(training_timesteps)
         self.prediction_horizon_steps = len(prediction_timesteps)
         self.num_epochs = int(config['model']['epochs'])
-        self.batch_id = config['model'].get('batch_id', None)
     def predict(self) -> np.ndarray:
         """
         Generate predictions based on the specified model method.
@@ -195,12 +191,6 @@ class NeuralOde:
                         best_model_state = {k: v.detach().cpu().clone() for k, v in ode_func.state_dict().items()}
 
                 print(f"Epoch {epoch+1:4d} | Train Loss: {epoch_loss / max(1,len(loader)):.6f} | Eval Loss: {avg_eval_loss:.6f}")
-
-                # Write progress for distributed worker (every 10 epochs to reduce I/O)
-                if self.batch_id and (epoch + 1) % 10 == 0:
-                    progress_file = Path(__file__).parent / f"progress_{self.batch_id}.yaml"
-                    with open(progress_file, 'w') as pf:
-                        yaml.dump({'epoch': epoch + 1, 'total_epochs': niters, 'pair_id': self.pair_id}, pf)
 
             # === Load best model ===
             if best_model_state is not None:
