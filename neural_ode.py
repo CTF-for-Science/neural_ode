@@ -116,7 +116,9 @@ class NeuralOde:
 
         def train_neural_ode(t_train_list, y_train_list, t_eval_list, y_eval_list,
                              niters=100, lr=1e-3, batch_size=40, seq_len=40):
+            print(f'CUDA: {torch.cuda.is_available()}', flush=True)
             device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+            print(f'Device: {device}', flush=True)
 
             # === Concatenate all training data for normalization ===
             y_train_all = torch.cat(y_train_list, dim=0)
