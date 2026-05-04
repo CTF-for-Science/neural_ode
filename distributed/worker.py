@@ -16,6 +16,7 @@ import yaml
 
 def run_gpu_worker(gpu_id, server_url, worker_name, repo_path):
     """Worker loop for a single GPU."""
+    print(f"[GPU {gpu_id}] Worker ready, connecting to {server_url}")
     while True:
         # Request job from server
         try:
