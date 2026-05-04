@@ -1,5 +1,7 @@
+import json
 import numpy as np
 import importlib
+import os
 from typing import Optional, Dict
 from ctf4science.eval_module import evaluate_custom
 import torch
@@ -61,12 +63,14 @@ class NeuralOde:
         self.batch_size = int(config['model']['batch_size'])
         self.seq_len = int(config['model']['seq_len'])
         self.pair_id = pair_id
+        self.batch_id = config['model'].get('batch_id', '')
         self.train_data = train_data
         self.init_data = init_data
         self.prediction_timesteps = torch.tensor(prediction_timesteps)
         self.training_timesteps = torch.tensor(training_timesteps)
         self.prediction_horizon_steps = len(prediction_timesteps)
         self.num_epochs = int(config['model']['epochs'])
+        self.progress_file = f"/tmp/neural_ode_progress_{self.batch_id}.json"
     def predict(self) -> np.ndarray:
         """
         Generate predictions based on the specified model method.
@@ -191,6 +195,13 @@ class NeuralOde:
                         best_model_state = {k: v.detach().cpu().clone() for k, v in ode_func.state_dict().items()}
 
                 print(f"Epoch {epoch+1:4d} | Train Loss: {epoch_loss / max(1,len(loader)):.6f} | Eval Loss: {avg_eval_loss:.6f}")
+
+                # Write progress for distributed worker
+                try:
+                    with open(self.progress_file, 'w') as pf:
+                        json.dump({'epoch': epoch + 1, 'total_epochs': niters, 'pair_id': self.pair_id}, pf)
+                except:
+                    pass
 
             # === Load best model ===
             if best_model_state is not None:

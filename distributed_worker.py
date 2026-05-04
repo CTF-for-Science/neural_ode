@@ -9,6 +9,7 @@ For multiple GPUs, use launch_workers.py instead.
 """
 
 import argparse
+import json
 import os
 import socket
 import sys
@@ -41,22 +42,36 @@ class HeartbeatThread(threading.Thread):
         self.worker_id = worker_id
         self.interval = interval
         self.trial_id = None
+        self.batch_id = None
         self.progress = {}
         self.running = True
 
-    def set_trial(self, trial_id):
+    def set_trial(self, trial_id, batch_id=None):
         self.trial_id = trial_id
+        self.batch_id = batch_id
         self.progress = {}
-
-    def update_progress(self, info):
-        self.progress = info
 
     def stop(self):
         self.running = False
 
+    def _read_progress(self):
+        """Read progress from file written by neural_ode.py."""
+        if not self.batch_id:
+            return {}
+        progress_file = f"/tmp/neural_ode_progress_{self.batch_id}.json"
+        try:
+            if os.path.exists(progress_file):
+                with open(progress_file, 'r') as f:
+                    return json.load(f)
+        except:
+            pass
+        return {}
+
     def run(self):
         while self.running:
             if self.trial_id is not None:
+                # Read latest progress from file
+                self.progress = self._read_progress()
                 try:
                     response = requests.post(
                         f"{self.server_url}/heartbeat",
@@ -209,7 +224,8 @@ def main():
             print(f"Params: {params}")
             print(f"{'='*50}\n")
 
-            heartbeat.set_trial(trial_id)
+            batch_id = trial_config.get('model', {}).get('batch_id', '')
+            heartbeat.set_trial(trial_id, batch_id)
 
             try:
                 result = run_trial(args.run_opt, trial_config)
@@ -220,6 +236,14 @@ def main():
                 error_msg = f"{type(e).__name__}: {e}\n{traceback.format_exc()}"
                 print(f"\nTrial {trial_id} failed: {error_msg}")
                 report_result(args.server, worker_id, trial_id, False, {'error': error_msg}, args.max_retries)
+
+            # Clean up progress file
+            progress_file = f"/tmp/neural_ode_progress_{batch_id}.json"
+            if os.path.exists(progress_file):
+                try:
+                    os.unlink(progress_file)
+                except:
+                    pass
 
             heartbeat.set_trial(None)
 
