@@ -3,7 +3,11 @@
 Worker for distributed hyperparameter tuning.
 
 Usage:
-    python distributed_worker.py --server http://SERVER_IP:5000 --run-opt path/to/run_opt.py
+    # Single worker (1 GPU)
+    python distributed_worker.py --server http://SERVER_IP:5050 --run-opt run_opt.py
+
+    # Multiple workers (e.g., 4 GPUs on this machine)
+    python distributed_worker.py --server http://SERVER_IP:5050 --run-opt run_opt.py --num-workers 4
 """
 
 import argparse
@@ -21,9 +25,10 @@ import yaml
 
 def parse_args():
     parser = argparse.ArgumentParser(description='Worker for distributed hyperparameter tuning')
-    parser.add_argument('--server', type=str, required=True, help='Server URL (e.g., http://localhost:5000)')
+    parser.add_argument('--server', type=str, required=True, help='Server URL (e.g., http://localhost:5050)')
     parser.add_argument('--run-opt', type=str, required=True, help='Path to run_opt.py')
     parser.add_argument('--worker-id', type=str, default=None, help='Worker ID (auto-generated if not provided)')
+    parser.add_argument('--num-workers', type=int, default=1, help='Number of parallel workers/GPUs (default: 1)')
     parser.add_argument('--heartbeat-interval', type=int, default=60)
     parser.add_argument('--retry-delay', type=int, default=30)
     parser.add_argument('--max-retries', type=int, default=3)
@@ -165,72 +170,111 @@ def run_trial(run_opt_path, trial_config):
             os.unlink(config_path)
 
 
-def main():
-    args = parse_args()
+def run_worker(server, run_opt, worker_id, gpu_id, heartbeat_interval, retry_delay, max_retries):
+    """Run a single worker loop."""
+    # Set GPU for this worker
+    os.environ['CUDA_VISIBLE_DEVICES'] = str(gpu_id)
 
-    worker_id = args.worker_id or f"{socket.gethostname()}_{os.getpid()}"
-
-    print(f"Worker: {worker_id}")
-    print(f"Server: {args.server}")
-    print(f"run_opt: {args.run_opt}")
+    print(f"[{worker_id}] GPU: {gpu_id}")
+    print(f"[{worker_id}] Server: {server}")
+    print(f"[{worker_id}] run_opt: {run_opt}")
     print()
 
-    # Verify run_opt.py exists
-    if not os.path.exists(args.run_opt):
-        print(f"Error: run_opt.py not found: {args.run_opt}")
-        sys.exit(1)
-
     # Start heartbeat
-    heartbeat = HeartbeatThread(args.server, worker_id, args.heartbeat_interval)
+    heartbeat = HeartbeatThread(server, worker_id, heartbeat_interval)
     heartbeat.start()
 
     while True:
         try:
-            print(f"Requesting trial...")
-            trial_info = get_trial(args.server, worker_id, args.max_retries)
+            print(f"[{worker_id}] Requesting trial...")
+            trial_info = get_trial(server, worker_id, max_retries)
 
             if trial_info.get('status') == 'done':
-                print("All trials completed. Exiting.")
+                print(f"[{worker_id}] All trials completed. Exiting.")
                 break
 
             if trial_info.get('status') != 'ok':
-                print(f"Unexpected response: {trial_info}")
-                time.sleep(args.retry_delay)
+                print(f"[{worker_id}] Unexpected response: {trial_info}")
+                time.sleep(retry_delay)
                 continue
 
             trial_id = trial_info['trial_id']
             params = trial_info['params']
             trial_config = trial_info['config']
 
-            print(f"\n{'='*50}")
-            print(f"Trial {trial_id}")
-            print(f"Params: {params}")
-            print(f"{'='*50}\n")
+            print(f"\n[{worker_id}] {'='*50}")
+            print(f"[{worker_id}] Trial {trial_id}")
+            print(f"[{worker_id}] Params: {params}")
+            print(f"[{worker_id}] {'='*50}\n")
 
             heartbeat.set_trial(trial_id)
 
             try:
-                result = run_trial(args.run_opt, trial_config)
-                print(f"\nTrial {trial_id} completed: score={result['score']:.4f}")
-                report_result(args.server, worker_id, trial_id, True, result, args.max_retries)
+                result = run_trial(run_opt, trial_config)
+                print(f"\n[{worker_id}] Trial {trial_id} completed: score={result['score']:.4f}")
+                report_result(server, worker_id, trial_id, True, result, max_retries)
 
             except Exception as e:
                 error_msg = f"{type(e).__name__}: {e}\n{traceback.format_exc()}"
-                print(f"\nTrial {trial_id} failed: {error_msg}")
-                report_result(args.server, worker_id, trial_id, False, {'error': error_msg}, args.max_retries)
+                print(f"\n[{worker_id}] Trial {trial_id} failed: {error_msg}")
+                report_result(server, worker_id, trial_id, False, {'error': error_msg}, max_retries)
 
             heartbeat.set_trial(None)
 
         except KeyboardInterrupt:
-            print("\nInterrupted. Exiting.")
+            print(f"\n[{worker_id}] Interrupted. Exiting.")
             break
 
         except Exception as e:
-            print(f"Error: {e}")
+            print(f"[{worker_id}] Error: {e}")
             traceback.print_exc()
-            time.sleep(args.retry_delay)
+            time.sleep(retry_delay)
 
     heartbeat.stop()
+
+
+def main():
+    args = parse_args()
+
+    # Verify run_opt.py exists
+    if not os.path.exists(args.run_opt):
+        print(f"Error: run_opt.py not found: {args.run_opt}")
+        sys.exit(1)
+
+    hostname = socket.gethostname()
+    base_worker_id = args.worker_id or hostname
+
+    if args.num_workers == 1:
+        # Single worker
+        worker_id = f"{base_worker_id}_gpu0"
+        run_worker(args.server, args.run_opt, worker_id, 0,
+                   args.heartbeat_interval, args.retry_delay, args.max_retries)
+    else:
+        # Multiple workers - spawn processes
+        import multiprocessing
+        print(f"Spawning {args.num_workers} workers...")
+
+        processes = []
+        for gpu_id in range(args.num_workers):
+            worker_id = f"{base_worker_id}_gpu{gpu_id}"
+            p = multiprocessing.Process(
+                target=run_worker,
+                args=(args.server, args.run_opt, worker_id, gpu_id,
+                      args.heartbeat_interval, args.retry_delay, args.max_retries)
+            )
+            p.start()
+            processes.append(p)
+            print(f"Started {worker_id}")
+
+        try:
+            for p in processes:
+                p.join()
+        except KeyboardInterrupt:
+            print("\nInterrupted. Terminating all workers...")
+            for p in processes:
+                p.terminate()
+            for p in processes:
+                p.join()
 
 
 if __name__ == '__main__':

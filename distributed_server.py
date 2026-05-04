@@ -36,7 +36,7 @@ TRIAL_TIMEOUT = 7200
 def parse_args():
     parser = argparse.ArgumentParser(description='Central server for distributed hyperparameter tuning')
     parser.add_argument('--config', type=str, required=True, help='Path to tuning config YAML')
-    parser.add_argument('--port', type=int, default=5000)
+    parser.add_argument('--port', type=int, default=5050)
     parser.add_argument('--host', type=str, default='0.0.0.0')
     parser.add_argument('--trials', type=int, default=None, help='Override n_trials from config')
     parser.add_argument('--metric', type=str, default='score')
