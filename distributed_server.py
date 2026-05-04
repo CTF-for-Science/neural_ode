@@ -187,28 +187,54 @@ def check_stale_trials():
                 pass
 
 
+def print_status_table():
+    """Print a formatted status table."""
+    with lock:
+        completed = len([t for t in study.trials if t.state == optuna.trial.TrialState.COMPLETE])
+        failed = len([t for t in study.trials if t.state == optuna.trial.TrialState.FAIL])
+
+        best = None
+        try:
+            if study.best_trial:
+                best = study.best_value
+        except ValueError:
+            pass
+
+        # Header
+        print("\n" + "="*80)
+        parts = [f"Completed: {completed}", f"Running: {len(active_trials)}", f"Failed: {failed}"]
+        if best is not None:
+            parts.append(f"Best: {best:.4f}")
+        print(f"[Status] {' | '.join(parts)}")
+        print("-"*80)
+        print(f"{'Worker':<25} {'Trial':<8} {'Status':<20} {'Score':<10}")
+        print("-"*80)
+
+        # Active workers
+        for trial_id, info in active_trials.items():
+            worker = info['worker_id']
+            progress = info.get('progress', {})
+            epoch = progress.get('epoch', '?')
+            pair_id = progress.get('pair_id', '?')
+            status = f"Epoch {epoch}, Pair {pair_id}"
+            print(f"{worker:<25} {trial_id:<8} {status:<20} {'...':<10}")
+
+        # Recent completed (last 5)
+        completed_trials = [t for t in study.trials if t.state == optuna.trial.TrialState.COMPLETE]
+        for t in completed_trials[-5:]:
+            worker = t.user_attrs.get('worker_id', 'unknown')
+            score = t.value if t.value else 0
+            print(f"{worker:<25} {t.number:<8} {'Completed':<20} {score:<10.4f}")
+
+        print("="*80 + "\n")
+
+
 def background_checker():
     """Background thread for status and stale trial checking."""
     while True:
         time.sleep(30)
         check_stale_trials()
-
-        with lock:
-            completed = len([t for t in study.trials if t.state == optuna.trial.TrialState.COMPLETE])
-            failed = len([t for t in study.trials if t.state == optuna.trial.TrialState.FAIL])
-            running = len(active_trials)
-
-            best = None
-            try:
-                if study.best_trial:
-                    best = study.best_value
-            except ValueError:
-                pass
-
-            parts = [f"Completed: {completed}", f"Running: {running}", f"Failed: {failed}"]
-            if best is not None:
-                parts.append(f"Best: {best:.4f}")
-            print(f"[Status] {' | '.join(parts)}")
+        print_status_table()
 
 
 @app.route('/get_trial', methods=['GET'])
@@ -300,6 +326,7 @@ def report():
 
                 # Save trial results
                 trial = study.trials[trial_id]
+                trial.set_user_attr('worker_id', worker_id)
                 for k, v in result.items():
                     if k != 'score':
                         trial.set_user_attr(k, v)

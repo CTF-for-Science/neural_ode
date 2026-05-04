@@ -35,35 +35,47 @@ def parse_args():
 class HeartbeatThread(threading.Thread):
     """Background thread for heartbeats."""
 
-    def __init__(self, server_url, worker_id, interval=60):
+    def __init__(self, server_url, worker_id, run_opt_dir, interval=60):
         super().__init__(daemon=True)
         self.server_url = server_url
         self.worker_id = worker_id
+        self.run_opt_dir = run_opt_dir
         self.interval = interval
         self.trial_id = None
-        self.progress = {}
+        self.batch_id = None
         self.running = True
 
-    def set_trial(self, trial_id):
+    def set_trial(self, trial_id, batch_id=None):
         self.trial_id = trial_id
-        self.progress = {}
-
-    def update_progress(self, info):
-        self.progress = info
+        self.batch_id = batch_id
 
     def stop(self):
         self.running = False
+
+    def read_progress(self):
+        """Read progress from progress file."""
+        if not self.batch_id:
+            return {}
+        try:
+            progress_file = os.path.join(self.run_opt_dir, f"progress_{self.batch_id}.yaml")
+            if os.path.exists(progress_file):
+                with open(progress_file, 'r') as f:
+                    return yaml.safe_load(f) or {}
+        except:
+            pass
+        return {}
 
     def run(self):
         while self.running:
             if self.trial_id is not None:
                 try:
+                    progress = self.read_progress()
                     response = requests.post(
                         f"{self.server_url}/heartbeat",
                         json={
                             'trial_id': self.trial_id,
                             'worker_id': self.worker_id,
-                            'progress': self.progress,
+                            'progress': progress,
                         },
                         timeout=10
                     )
@@ -183,7 +195,8 @@ def main():
         sys.exit(1)
 
     # Start heartbeat
-    heartbeat = HeartbeatThread(args.server, worker_id, args.heartbeat_interval)
+    run_opt_dir = os.path.dirname(os.path.abspath(args.run_opt))
+    heartbeat = HeartbeatThread(args.server, worker_id, run_opt_dir, args.heartbeat_interval)
     heartbeat.start()
 
     while True:
@@ -209,7 +222,8 @@ def main():
             print(f"Params: {params}")
             print(f"{'='*50}\n")
 
-            heartbeat.set_trial(trial_id)
+            batch_id = trial_config['model'].get('batch_id', '')
+            heartbeat.set_trial(trial_id, batch_id)
 
             try:
                 result = run_trial(args.run_opt, trial_config)
@@ -221,7 +235,7 @@ def main():
                 print(f"\nTrial {trial_id} failed: {error_msg}")
                 report_result(args.server, worker_id, trial_id, False, {'error': error_msg}, args.max_retries)
 
-            heartbeat.set_trial(None)
+            heartbeat.set_trial(None, None)
 
         except KeyboardInterrupt:
             print("\nInterrupted. Exiting.")

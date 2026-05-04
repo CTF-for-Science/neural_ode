@@ -76,8 +76,14 @@ def main(config_path: str) -> None:
         'pairs': []
     }
 
+    # Progress file for distributed worker
+    progress_file = file_dir / f"progress_{config['model'].get('batch_id', 'default')}.yaml"
+
     # Process each sub-dataset
-    for pair_id in pair_ids:
+    for idx, pair_id in enumerate(pair_ids):
+        # Write progress
+        with open(progress_file, 'w') as f:
+            yaml.dump({'pair_id': pair_id, 'pair_idx': idx + 1, 'total_pairs': len(pair_ids)}, f)
         # Calculate appropriate train_split for this pair
         default_split = config['model']['train_split']
         train_split = get_train_split(dataset_name, pair_id, default_split)
@@ -106,6 +112,10 @@ def main(config_path: str) -> None:
             'pair_id': pair_id,
             'metrics': results
         })
+
+    # Clean up progress file
+    if progress_file.exists():
+        progress_file.unlink()
 
     # Save aggregated batch results
     results_file = file_dir / f"results_{config['model']['batch_id']}.yaml"
