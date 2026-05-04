@@ -11,6 +11,7 @@ import os
 import socket
 import subprocess
 import sys
+import time
 
 
 def parse_args():
@@ -33,19 +34,21 @@ def main():
     for gpu_id in range(args.num_gpus):
         env = os.environ.copy()
         env['CUDA_VISIBLE_DEVICES'] = str(gpu_id)
+        env['PYTHONUNBUFFERED'] = '1'
 
         worker_id = f"{base_id}_gpu{gpu_id}"
 
         cmd = [
-            sys.executable, 'distributed_worker.py',
+            sys.executable, '-u', 'distributed_worker.py',
             '--server', args.server,
             '--run-opt', args.run_opt,
             '--worker-id', worker_id,
         ]
 
-        p = subprocess.Popen(cmd, env=env)
+        p = subprocess.Popen(cmd, env=env, stdout=None, stderr=None)
         processes.append(p)
         print(f"Started {worker_id} (pid {p.pid}, GPU {gpu_id})")
+        time.sleep(2)  # Stagger worker starts
 
     print(f"\nAll {args.num_gpus} workers running. Press Ctrl+C to stop.")
 
