@@ -57,6 +57,17 @@ def run_gpu_worker(gpu_id, server_url, worker_name, repo_path):
                 env=env
             )
 
+            # Check if process crashed immediately
+            time.sleep(2)
+            if proc.poll() is not None:
+                print(f"[GPU {gpu_id}] Process exited immediately with code {proc.returncode}")
+                print(f"[GPU {gpu_id}] Log contents:")
+                try:
+                    print(log_file.read_text())
+                except:
+                    pass
+                continue
+
             # Monitor progress by tailing log file
             last_status = "starting"
             while proc.poll() is None:
