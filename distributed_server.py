@@ -13,7 +13,7 @@ import threading
 import time
 from datetime import datetime
 from pathlib import Path
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, render_template_string
 
 import optuna
 from optuna.samplers import TPESampler
@@ -235,6 +235,195 @@ def background_checker():
         time.sleep(30)
         check_stale_trials()
         print_status_table()
+
+
+DASHBOARD_HTML = '''
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Distributed Tuning Dashboard</title>
+    <meta http-equiv="refresh" content="10">
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; margin: 20px; background: #1a1a2e; color: #eee; }
+        h1 { color: #00d4ff; }
+        .stats { display: flex; gap: 20px; margin-bottom: 20px; }
+        .stat-box { background: #16213e; padding: 20px; border-radius: 8px; min-width: 120px; }
+        .stat-box h3 { margin: 0; color: #888; font-size: 14px; }
+        .stat-box .value { font-size: 32px; font-weight: bold; margin-top: 5px; }
+        .completed .value { color: #00ff88; }
+        .running .value { color: #ffaa00; }
+        .failed .value { color: #ff4444; }
+        .best .value { color: #00d4ff; }
+        table { width: 100%; border-collapse: collapse; background: #16213e; border-radius: 8px; overflow: hidden; }
+        th, td { padding: 12px 15px; text-align: left; border-bottom: 1px solid #2a2a4a; }
+        th { background: #0f3460; color: #00d4ff; }
+        tr:hover { background: #1f4068; }
+        .status-running { color: #ffaa00; }
+        .status-completed { color: #00ff88; }
+        .status-failed { color: #ff4444; }
+        .progress-bar { background: #333; border-radius: 4px; height: 8px; width: 100px; display: inline-block; }
+        .progress-fill { background: #00d4ff; height: 100%; border-radius: 4px; }
+        .section { margin-top: 30px; }
+        .section h2 { color: #00d4ff; border-bottom: 1px solid #2a2a4a; padding-bottom: 10px; }
+        .auto-refresh { color: #666; font-size: 12px; }
+    </style>
+</head>
+<body>
+    <h1>Distributed Hyperparameter Tuning</h1>
+    <p class="auto-refresh">Auto-refreshes every 10 seconds</p>
+
+    <div class="stats">
+        <div class="stat-box completed">
+            <h3>Completed</h3>
+            <div class="value">{{ completed }}</div>
+        </div>
+        <div class="stat-box running">
+            <h3>Running</h3>
+            <div class="value">{{ running }}</div>
+        </div>
+        <div class="stat-box failed">
+            <h3>Failed</h3>
+            <div class="value">{{ failed }}</div>
+        </div>
+        <div class="stat-box">
+            <h3>Target</h3>
+            <div class="value">{{ target }}</div>
+        </div>
+        <div class="stat-box best">
+            <h3>Best Score</h3>
+            <div class="value">{{ best_score }}</div>
+        </div>
+    </div>
+
+    <div class="section">
+        <h2>Active Workers ({{ active_workers|length }})</h2>
+        {% if active_workers %}
+        <table>
+            <tr>
+                <th>Worker</th>
+                <th>Trial</th>
+                <th>Progress</th>
+                <th>Duration</th>
+            </tr>
+            {% for w in active_workers %}
+            <tr>
+                <td>{{ w.worker_id }}</td>
+                <td>#{{ w.trial_id }}</td>
+                <td class="status-running">{{ w.status }}</td>
+                <td>{{ w.duration }}</td>
+            </tr>
+            {% endfor %}
+        </table>
+        {% else %}
+        <p>No active workers</p>
+        {% endif %}
+    </div>
+
+    <div class="section">
+        <h2>Recent Completed Trials</h2>
+        {% if recent_trials %}
+        <table>
+            <tr>
+                <th>Trial</th>
+                <th>Worker</th>
+                <th>Score</th>
+                <th>Parameters</th>
+            </tr>
+            {% for t in recent_trials %}
+            <tr>
+                <td>#{{ t.number }}</td>
+                <td>{{ t.worker }}</td>
+                <td class="status-completed">{{ t.score }}</td>
+                <td>{{ t.params }}</td>
+            </tr>
+            {% endfor %}
+        </table>
+        {% else %}
+        <p>No completed trials yet</p>
+        {% endif %}
+    </div>
+
+    {% if best_params %}
+    <div class="section">
+        <h2>Best Parameters</h2>
+        <table>
+            <tr>
+                <th>Parameter</th>
+                <th>Value</th>
+            </tr>
+            {% for k, v in best_params.items() %}
+            <tr>
+                <td>{{ k }}</td>
+                <td>{{ v }}</td>
+            </tr>
+            {% endfor %}
+        </table>
+    </div>
+    {% endif %}
+</body>
+</html>
+'''
+
+
+@app.route('/')
+def dashboard():
+    """Web dashboard for monitoring."""
+    with lock:
+        completed = len([t for t in study.trials if t.state == optuna.trial.TrialState.COMPLETE])
+        failed = len([t for t in study.trials if t.state == optuna.trial.TrialState.FAIL])
+        running = len(active_trials)
+
+        with open(output_dir / 'study_config.json', 'r') as f:
+            study_config = json.load(f)
+        target = study_config['target_trials']
+
+        best_score = '-'
+        best_params = {}
+        try:
+            if study.best_trial:
+                best_score = f"{study.best_value:.4f}"
+                best_params = study.best_params
+        except ValueError:
+            pass
+
+        # Active workers
+        active_workers = []
+        now = time.time()
+        for trial_id, info in active_trials.items():
+            progress = info.get('progress', {})
+            epoch = progress.get('epoch', '?')
+            pair_id = progress.get('pair_id', '?')
+            duration_sec = int(now - info['start_time'])
+            duration = f"{duration_sec // 60}m {duration_sec % 60}s"
+            active_workers.append({
+                'worker_id': info['worker_id'],
+                'trial_id': trial_id,
+                'status': f"Epoch {epoch}, Pair {pair_id}",
+                'duration': duration,
+            })
+
+        # Recent completed trials
+        completed_trials = [t for t in study.trials if t.state == optuna.trial.TrialState.COMPLETE]
+        recent_trials = []
+        for t in completed_trials[-10:][::-1]:  # Last 10, reversed
+            recent_trials.append({
+                'number': t.number,
+                'worker': t.user_attrs.get('worker_id', 'unknown'),
+                'score': f"{t.value:.4f}" if t.value else '-',
+                'params': ', '.join(f"{k}={v:.3g}" if isinstance(v, float) else f"{k}={v}" for k, v in t.params.items()),
+            })
+
+        return render_template_string(
+            DASHBOARD_HTML,
+            completed=completed,
+            running=running,
+            failed=failed,
+            target=target,
+            best_score=best_score,
+            best_params=best_params,
+            active_workers=active_workers,
+            recent_trials=recent_trials,
+        )
 
 
 @app.route('/get_trial', methods=['GET'])
@@ -462,12 +651,13 @@ def main():
         study, n_trials = create_study(args, cfg)
 
     print(f"\nServer: {args.host}:{args.port}")
-    print(f"Endpoints:")
+    print(f"\nDashboard: http://localhost:{args.port}/")
+    print(f"\nAPI Endpoints:")
     print(f"  GET  /get_trial  - Request a trial")
     print(f"  POST /heartbeat  - Send heartbeat")
     print(f"  POST /report     - Report results")
-    print(f"  GET  /status     - Get status")
-    print(f"  GET  /results    - Get all results")
+    print(f"  GET  /status     - Get status (JSON)")
+    print(f"  GET  /results    - Get all results (JSON)")
     print()
 
     checker = threading.Thread(target=background_checker, daemon=True)
