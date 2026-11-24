@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import List, Dict, Any
 import datetime
 import numpy as np
-from ctf4science.data_module import load_dataset, load_validation_dataset, get_validation_prediction_timesteps, parse_pair_ids, get_applicable_plots,get_training_timesteps
+from ctf4science.data_module import load_dataset, load_validation_dataset, get_validation_prediction_timesteps, parse_pair_ids, get_applicable_plots, get_training_timesteps, get_config
 from ctf4science.eval_module import evaluate_custom, save_results
 from ctf4science.visualization_module import Visualization
 from neural_ode import NeuralOde
@@ -28,8 +28,9 @@ def get_train_split(dataset_name: str, pair_id: int, default_split: float = 0.8)
     training_ts = get_training_timesteps(dataset_name, pair_id)
     total_timesteps = len(training_ts[0]) if len(training_ts) > 0 else 1000
     
-    # k_long requirement (from msfr.yaml evaluation_params)
-    k_long = 200
+    k_long = get_config(dataset_name).get('evaluation_params', {}).get('k_long')
+    if k_long is None:
+        return default_split
     min_val_timesteps = k_long + 50  # Add margin
     
     # Calculate max train_split that still gives enough validation data

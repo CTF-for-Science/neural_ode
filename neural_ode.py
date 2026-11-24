@@ -200,7 +200,7 @@ class NeuralOde:
                 try:
                     with open(self.progress_file, 'w') as pf:
                         json.dump({'epoch': epoch + 1, 'total_epochs': niters, 'pair_id': self.pair_id}, pf)
-                except:
+                except OSError:
                     pass
 
             # === Load best model ===

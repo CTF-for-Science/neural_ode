@@ -5,7 +5,7 @@ echo "=== Neural ODE Distributed Training Setup ==="
 
 # Get the directory where this script is located
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-CTF_DIR="$(dirname "$SCRIPT_DIR")/ctf4science"
+CTF_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 DATA_DIR="$CTF_DIR/data"
 
 echo ""
